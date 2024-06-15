@@ -1,0 +1,31 @@
+cabal-version:       2.2
+
+name:                func2024genetic
+version:             0.1.0.0
+-- synopsis:
+-- description:
+homepage:            https://github.com/fstachura/func2024genetic
+license:             MIT
+license-file:        LICENSE
+author:              Franciszek Stachura
+copyright:           2024 Franciszek Stachura
+build-type:          Simple
+extra-source-files:  README.md
+
+executable genetic
+  hs-source-dirs:      src
+  main-is:             Main.hs
+  default-language:    Haskell2010
+  build-depends:       base >= 4.7 && < 5,
+                       mtl >= 2.3.1,
+                       random >= 1.2.1.2
+  ghc-options:         -Wall
+                       -Wcompat
+                       -Widentities
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -Wmissing-export-lists
+                       -Wmissing-home-modules
+                       -Wpartial-fields
+                       -Wredundant-constraints
+                       -O2
