@@ -59,10 +59,15 @@ onePointCrossoverMate a b = do
     let (m_bx, e_bx) = decodeFloat (fst b)
     let (m_by, e_by) = decodeFloat (snd b)
 
-    new_mx <- (randomCrossoverInt 52 m_ax m_bx)
-    new_ex <- (randomCrossoverInt 11 e_ax e_bx)
-    new_my <- (randomCrossoverInt 52 m_ay m_by)
-    new_ey <- (randomCrossoverInt 11 e_ay e_by)
+    let bit_size_m = case (bitSizeMaybe m_ax) of
+            Just n -> n
+            Nothing -> 52
+    let bit_size_e = (bitSize e_ax)
+
+    new_mx <- (randomCrossoverInt bit_size_m m_ax m_bx)
+    new_ex <- (randomCrossoverInt bit_size_e e_ax e_bx)
+    new_my <- (randomCrossoverInt bit_size_m m_ay m_by)
+    new_ey <- (randomCrossoverInt bit_size_e e_ay e_by)
 
     let newx = encodeFloat new_mx new_ex
     let newy = encodeFloat new_my new_ey
@@ -80,10 +85,15 @@ uniformBinaryCrossoverMate a b = do
     let (m_bx, e_bx) = decodeFloat (fst b)
     let (m_by, e_by) = decodeFloat (snd b)
 
-    new_mx <- randomCombineInt 52 m_ax m_bx
-    new_ex <- randomCombineInt 11 e_ax e_bx
-    new_my <- randomCombineInt 52 m_ay m_by
-    new_ey <- randomCombineInt 11 e_ay e_by
+    let bit_size_m = case (bitSizeMaybe m_ax) of
+            Just n -> n
+            Nothing -> 52
+    let bit_size_e = (bitSize e_ax)
+
+    new_mx <- randomCombineInt bit_size_m m_ax m_bx
+    new_ex <- randomCombineInt bit_size_e e_ax e_bx
+    new_my <- randomCombineInt bit_size_m m_ay m_by
+    new_ey <- randomCombineInt bit_size_e e_ay e_by
 
     let newx = encodeFloat new_mx new_ex
     let newy = encodeFloat new_my new_ey
