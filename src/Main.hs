@@ -1,10 +1,8 @@
 import Control.Monad.State
-import Data.List
+import qualified Data.List
 import System.Random
-import Debug.Trace
 import Data.Bits
 import TestFunctions
-import Utils
 import Random
 
 type Gene a = (a, a)
@@ -15,80 +13,59 @@ data GeneticState a = GeneticState {
     matingStrategy :: (Gene a) -> (Gene a) -> State (GeneticState a) (Gene a),
     mutationStrategy :: (Gene a) -> State (GeneticState a) (Gene a),
     generator :: StdGen,
-    genes :: [Gene a], 
+    genes :: [Gene a],
     numOfFitGenes :: Int,
     iterations :: Int
 }
 
 runInRand :: State StdGen a -> State (GeneticState b) a
 runInRand m = do
-    state <- get
-    let (result, newgen) = runState m (generator state)
-    modify (\state -> state { generator = newgen })
+    st <- get
+    let (result, newgen) = runState m (generator st)
+    modify (\nst -> nst { generator = newgen })
     return $ result
 
-randomCombineInt :: (Bits n, Show n, Integral n) => Int -> n -> n -> State (GeneticState a) (n, [Bool])
-randomCombineInt bits na nb = do
-    let range = (0, 1) :: (Int, Int)
-    probs <- runInRand (randListFromState range bits)
-    signProb <- runInRand (randFromState range)
-    let conva = (numToBits bits (abs na))
-    let convb = (numToBits bits (abs nb))
-    let result = map 
-            (\(p, a, b) -> if p == 0 then a else b) 
-            (zip3 probs conva convb)
-    return $ ((if signProb == 0 then (sign na) else (sign nb)), result)
+randomCombineInt :: (Bits n, Random n, Num n, Integral n) => Int -> n -> n -> State (GeneticState a) n
+randomCombineInt bits a b = do
+    mask <- runInRand (randFromState (0, complement 0))
+    return $ (.|.) ((.&.) a mask) ((.&.) b (complement mask))
 
-randomCrossoverInt :: (Bits n, Show n, Integral n) => Int -> n -> n -> State (GeneticState a) (n, [Bool])
+randomCrossoverInt :: (Bits n, Integral n) => Int -> n -> n -> State (GeneticState a) n
 randomCrossoverInt bits na nb = do
     let range = (0, bits) :: (Int, Int)
     crossover <- runInRand $ randFromState range
-    let conva = (numToBits bits (abs na))
-    let convb = (numToBits bits (abs nb))
-    let result = (take crossover conva) ++ (drop crossover convb)
-    return $ ((sign na), result)
+    let mask = shiftL (complement 0) crossover
+    let result = (.|.) ((.&.) na mask) ((.&.) nb (complement mask))
+    return $ result
 
 -- intermediate reocombination: a1*b+a2*(1-b) where b in [-d,1+d]
 
-intermediateRecombinationMate :: (Show a, Random a, RealFloat a) => a -> (Gene a) -> (Gene a) -> State (GeneticState a) (Gene a)
+intermediateRecombinationMate :: (Random a, RealFloat a) => a -> (Gene a) -> (Gene a) -> State (GeneticState a) (Gene a)
 intermediateRecombinationMate d (ax, ay) (bx, by) = do
-    bx <- runInRand $ randFromState (-d, 1+d)
-    by <- runInRand $ randFromState (-d, 1+d)
+    dx <- runInRand $ randFromState (-d, 1+d)
+    dy <- runInRand $ randFromState (-d, 1+d)
 
-    return $ (ax*bx + bx*(1-bx), ay*by + by*(1-by))
+    return $ (ax*dx + bx*(1-dx), ay*dy + by*(1-dy))
 
 -- one point crossover: pick x bits from gene a, rest from gene b
 -- float is converted to (mantisa, exponent), there is 50% chance that exponent will be randomly selected from either gene
--- instead of being combined (like mantisa)
+-- instead of being a combination of both exponents
 -- for each mantisa/exponent sign is randomly propagated from one of the genes
 
-onePointCrossoverMate :: (Show a, RealFloat a) => (Gene a) -> (Gene a) -> State (GeneticState a) (Gene a)
+onePointCrossoverMate :: (RealFloat a) => (Gene a) -> (Gene a) -> State (GeneticState a) (Gene a)
 onePointCrossoverMate a b = do
-    let (max, eax) = decodeFloat (fst a)
-    let (may, eay) = decodeFloat (snd a)
-    let (mbx, ebx) = decodeFloat (fst b)
-    let (mby, eby) = decodeFloat (snd b)
+    let (m_ax, e_ax) = decodeFloat (fst a)
+    let (m_ay, e_ay) = decodeFloat (snd a)
+    let (m_bx, e_bx) = decodeFloat (fst b)
+    let (m_by, e_by) = decodeFloat (snd b)
 
-    eyprob <- runInRand (randFromState (0 :: Int, 1))
+    new_mx <- (randomCrossoverInt 52 m_ax m_bx)
+    new_ex <- (randomCrossoverInt 11 e_ax e_bx)
+    new_my <- (randomCrossoverInt 52 m_ay m_by)
+    new_ey <- (randomCrossoverInt 11 e_ay e_by)
 
-    (snewmx, newmx) <- randomCrossoverInt 64 max mbx 
-
-    let crossoverOrPick = \a b -> do
-            exprob <- runInRand (randFromState (0 :: Int, 1))
-            if exprob == 1 then do
-                (sign, result) <- randomCrossoverInt 11 a b
-                return $ sign*(bitsToNum result)
-            else do
-                newex <- runInRand (randSelectFromState [a, b])
-                return $ newex
-
-    (snewmy, newmy) <- randomCrossoverInt 64 may mby 
-
-    newex <- crossoverOrPick eax ebx
-    newey <- crossoverOrPick eay eby
-
-    let newx = encodeFloat (snewmx*(bitsToNum newmx)) newex
-    let newy = encodeFloat (snewmy*(bitsToNum newmy)) newey
+    let newx = encodeFloat new_mx new_ex
+    let newy = encodeFloat new_my new_ey
 
     return (newx, newy)
 
@@ -96,27 +73,27 @@ onePointCrossoverMate a b = do
 -- float is converted to (mantisa, exponent), operation is repeated for both mantisa and exponent
 -- mantisa/exponent sign is randomly propagated from one of the genes
 
-uniformBinaryCrossoverMate :: (Show a, RealFloat a) => (Gene a) -> (Gene a) -> State (GeneticState a) (Gene a)
+uniformBinaryCrossoverMate :: (RealFloat a) => (Gene a) -> (Gene a) -> State (GeneticState a) (Gene a)
 uniformBinaryCrossoverMate a b = do
-    let (max, eax) = decodeFloat (fst a)
-    let (may, eay) = decodeFloat (snd a)
-    let (mbx, ebx) = decodeFloat (fst b)
-    let (mby, eby) = decodeFloat (snd b)
+    let (m_ax, e_ax) = decodeFloat (fst a)
+    let (m_ay, e_ay) = decodeFloat (snd a)
+    let (m_bx, e_bx) = decodeFloat (fst b)
+    let (m_by, e_by) = decodeFloat (snd b)
 
-    (snewmx, newmx) <- randomCombineInt 64 max mbx 
-    (snewex, newex) <- randomCombineInt 11 eax ebx 
-    (snewmy, newmy) <- randomCombineInt 64 may mby 
-    (snewey, newey) <- randomCombineInt 11 eay eby 
+    new_mx <- randomCombineInt 52 m_ax m_bx
+    new_ex <- randomCombineInt 11 e_ax e_bx
+    new_my <- randomCombineInt 52 m_ay m_by
+    new_ey <- randomCombineInt 11 e_ay e_by
 
-    let newx = encodeFloat (snewmx*(bitsToNum newmx)) (snewex*(bitsToNum newex))
-    let newy = encodeFloat (snewmy*(bitsToNum newmy)) (snewey*(bitsToNum newey))
+    let newx = encodeFloat new_mx new_ex
+    let newy = encodeFloat new_my new_ey
 
     return (newx, newy)
-    
-noMutation :: (Random a, Ord a, RealFloat a) => (Gene a) -> State (GeneticState a) (Gene a)
+
+noMutation :: (Gene a) -> State (GeneticState a) (Gene a)
 noMutation a = return a
 
-uniformMutation :: (Random a, Ord a, RealFloat a) => (Gene a) -> State (GeneticState a) (Gene a)
+uniformMutation :: (Random a, RealFloat a) => (Gene a) -> State (GeneticState a) (Gene a)
 uniformMutation (x, y) = do
     s <- get
     let ((ax, bx), (ay, by)) = (functionArea s)
@@ -126,147 +103,160 @@ uniformMutation (x, y) = do
     dy <- runInRand (randFromState (-cy, cy))
     return $ (x + dx, y + dy)
 
-randomBitFlipMutation :: (Random a, Ord a, RealFloat a) => (Gene a) -> State (GeneticState a) (Gene a)
-randomBitFlipMutation (x, y) = do 
+randomBitFlipMutation :: (RealFloat a) => (Gene a) -> State (GeneticState a) (Gene a)
+randomBitFlipMutation (x, y) = do
     let (mx, ex) = decodeFloat x
     let (my, ey) = decodeFloat y
 
-    let sgmx = sign mx
-    let sgmy = sign my
-    let sgex = sign ex
-    let sgey = sign ey
-    let bmx = numToBits 64 mx
-    let bmy = numToBits 64 my
-    let bex = numToBits 11 ex
-    let bey = numToBits 11 ey
+    let bit_size_m = case (bitSizeMaybe mx) of
+            Just n -> n
+            Nothing -> 52
+    let bit_size_e = (bitSize ex)
 
-    fmx <- runInRand $ randFromState (0, (length bmx)-1)
-    fmy <- runInRand $ randFromState (0, (length bmy)-1)
-    fex <- runInRand $ randFromState (0, 2*((length bex)-1))
-    fey <- runInRand $ randFromState (0, 2*((length bey)-1))
+    bit_to_flip <- runInRand $ randFromState (0, 2*(bit_size_m+bit_size_e))
 
-    let nx = encodeFloat (sgmx*(bitsToNum $ flipBit fmx bmx)) (sgex*(bitsToNum $ flipBit fex bex))
-    let ny = encodeFloat (sgmy*(bitsToNum $ flipBit fmy bmy)) (sgey*(bitsToNum $ flipBit fey bey))
+    let flipBit b n = xor n (setBit 0 b)
+
+    let ((new_mx, new_ex), (new_my, new_ey)) =
+                if bit_to_flip < bit_size_m then
+                    ((flipBit bit_to_flip mx, ex), (my, ey))
+                else if bit_to_flip < bit_size_m+bit_size_e then
+                    ((mx, flipBit (bit_to_flip-bit_size_m) ex), (my, ey))
+                else if bit_to_flip < 2*bit_size_m+bit_size_e then
+                    ((mx, ex), (flipBit (bit_to_flip-bit_size_m-bit_size_e) my, ey))
+                else
+                    ((mx, ex), (my, flipBit (bit_to_flip-2*bit_size_m-bit_size_e) ey))
+
+    let nx = encodeFloat new_mx new_ex
+    let ny = encodeFloat new_my new_ey
 
     return (nx, ny)
 
+repeatMutation :: (a -> State (GeneticState s) b) -> Int -> a -> State (GeneticState s) b
+repeatMutation mut n gene
+    | n <= 1 = mut gene
+    | otherwise = do
+        result <- mut gene
+        repeatMutation mut (n-1) gene
+
+randomRepeatMutation :: (a -> State (GeneticState s) b) -> (Int, Int) -> a -> State (GeneticState s) b
+randomRepeatMutation mut range gene = do
+    n <- runInRand $ randFromState range
+    repeatMutation mut n gene
+
 runRandomMutation :: [a -> State (GeneticState s) b] -> a -> State (GeneticState s) b
 runRandomMutation mutations gene = do
-    mut <- runInRand (randSelectFromState mutations) 
+    mut <- runInRand (randSelectFromState mutations)
     mut gene
 
 runRandomMatingStrategy :: [a -> a -> State (GeneticState s) b] -> a -> a -> State (GeneticState s) b
 runRandomMatingStrategy strategies a b = do
-    s <- runInRand (randSelectFromState strategies) 
+    s <- runInRand (randSelectFromState strategies)
     s a b
 
-generateNewGene :: (Show a, Random a, Ord a, RealFloat a) => [Gene a] -> State (GeneticState a) (Gene a)
+generateNewGene :: [Gene a] -> State (GeneticState a) (Gene a)
 generateNewGene fitGenes = do
-    state <- get
+    st <- get
     geneA <- runInRand (randSelectFromState fitGenes)
     geneB <- runInRand (randSelectFromState fitGenes)
-    ---- TODO check if genes are not the same?
-    let mateGenes = matingStrategy state
+    let mateGenes = matingStrategy st
     geneR <- (mateGenes geneA geneB)
-    (mutationStrategy state) geneR
+    (mutationStrategy st) geneR
 
-estimateFitness :: (Show a, Ord a, Num a, Fractional a) => (Gene a -> a) -> Gene a -> State (GeneticState a) a
+estimateFitness :: (Ord a, Fractional a) => (Gene a -> a) -> Gene a -> State (GeneticState a) a
 estimateFitness f p = do
-    state <- get
-    let ((ax, bx), (ay, by)) = functionArea state
+    st <- get
+    let ((ax, bx), (ay, by)) = functionArea st
     let (x, y) = p
     return $ if x < ax || x > bx || y < ay || y > by then
                 1 / 0
              else
                 f p
 
-rankByFitness :: (Show a, RealFloat a) => (Gene a -> a) -> [Gene a] -> State (GeneticState a) [(Gene a, a)]
-rankByFitness f genes = do
-    fitList <- mapM (\gene -> do 
+rankByFitness :: (RealFloat a) => (Gene a -> a) -> [Gene a] -> State (GeneticState a) [(Gene a, a)]
+rankByFitness f genesToRank = do
+    fitList <- mapM (\gene -> do
             fitness <- estimateFitness f gene
-            return (gene, fitness)) 
-            genes
-    return $ sortBy (\(_, fa) (_, fb) -> compare fa fb) fitList
+            return (gene, fitness))
+            genesToRank
+    return $ Data.List.sortBy (\(_, fa) (_, fb) -> compare fa fb) fitList
 
-iterateGenetic :: (Show a, RealFloat a, Random a) => State (GeneticState a) (Gene a, a)
+iterateGenetic :: (RealFloat a, Random a) => State (GeneticState a) (Gene a, a)
 iterateGenetic = do
-    state <- get
-    if (iterations state) == 0 then do
-        let gene = head (genes state)
-        return $ (gene, (function state) gene)
+    st <- get
+    if (iterations st) == 0 then do
+        let gene = head (genes st)
+        return $ (gene, (function st) gene)
     else do
-        let numOfGenesToCreate = (length (genes state))-(numOfFitGenes state)
-        rankedByFitness <- rankByFitness (function state) (genes state)
-        let fitResults = take (numOfFitGenes state) rankedByFitness
+        let numOfGenesToCreate = (length (genes st))-(numOfFitGenes st)
+        rankedByFitness <- rankByFitness (function st) (genes st)
+        let fitResults = take (numOfFitGenes st) rankedByFitness
         let fitGenes = (map fst fitResults)
         newGenes <- mapM (\_ -> generateNewGene fitGenes) [1..numOfGenesToCreate]
-        modify (\state -> state { genes = fitGenes ++ newGenes, iterations = ((iterations state)-1) })
+        modify (\nst -> nst { genes = fitGenes ++ newGenes, iterations = ((iterations st)-1) })
         iterateGenetic
 
 randomGeneticState :: IO (GeneticState Double)
 randomGeneticState = do
     gen <- getStdGen
 
-    let ((name, function, fa, expectedResult), newgen) = runState (randSelectFromState testFunctions) gen
+    let ((_, func, fa, _), newgen) = runState (randSelectFromState testFunctions) gen
 
     let numberOfGenes = 1000
-    let functionArea = fa
 
-    let (genes, newgen) = runState (randPointsFromState functionArea numberOfGenes) gen
+    let (random_genes, newgen2) = runState (randPointsFromState fa numberOfGenes) newgen
 
     return $ GeneticState {
-        function = function,
-        functionArea = functionArea,
-        generator = newgen,
+        function = func,
+        functionArea = fa,
+        generator = newgen2,
         matingStrategy = (intermediateRecombinationMate 0.25),
         mutationStrategy = randomBitFlipMutation,
-        genes = genes,
+        genes = random_genes,
         numOfFitGenes = 100,
         iterations = 1000
     }
 
 
 main :: IO ()
-main = do 
-    _ <- mapM (\(name, function, fa, expectedResult) -> do 
+main = do
+    _ <- mapM (\(name, func, fa, expectedResult) -> do
             let numberOfGenes = 1000
             --let functionArea :: ((Double, Double), (Double, Double)) = fa
-            let functionArea = fa
 
             gen <- getStdGen
-            let (genes, newgen) = runState (randPointsFromState functionArea numberOfGenes) gen
+            let (random_genes, newgen) = runState (randPointsFromState fa numberOfGenes) gen
 
-            let gstate = GeneticState {
-                function = function,
-                functionArea = functionArea,
+            let gst = GeneticState {
+                function = func,
+                functionArea = fa,
                 generator = newgen,
                 matingStrategy = runRandomMatingStrategy [
-                    (intermediateRecombinationMate 0.25)
-                    --onePointCrossoverMate, 
-                    --uniformBinaryCrossoverMate
+                    (intermediateRecombinationMate 2),
+                    onePointCrossoverMate,
+                    uniformBinaryCrossoverMate
                 ],
                 mutationStrategy = runRandomMutation [
                     uniformMutation,
-                    randomBitFlipMutation
+                    randomRepeatMutation randomBitFlipMutation (1,64)
                 ],
-                genes = genes,
+                genes = random_genes,
                 numOfFitGenes = 100,
                 iterations = 100
             }
 
-            let (result, newgstate) = runState (iterateGenetic) gstate
-            let eresult = function expectedResult
+            let (result, newgst) = runState (iterateGenetic) gst
+            let eresult = func expectedResult
 
-            setStdGen (generator newgstate)
+            setStdGen (generator newgst)
 
             putStrLn $ name
             putStrLn $ show $ result
-            putStrLn $ "f" ++ (show expectedResult) ++ " = " ++ (show eresult) ++ 
+            putStrLn $ "f" ++ (show expectedResult) ++ " = " ++ (show eresult) ++
                         " (d = " ++ (show $ abs $ (snd result)-eresult) ++ ")"
-        ) (filter (\(n, _, _, _) -> n `elem` ["eggholder", "dropwave"]) testFunctions)
+        ) testFunctions --(filter (\(n, _, _, _) -> n `elem` ["eggholder", "bohachevsky"]) testFunctions)
 
     return $ ()
-
 
 -- dropwave
 -- eggholder

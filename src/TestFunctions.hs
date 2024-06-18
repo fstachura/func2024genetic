@@ -23,7 +23,7 @@ booth v = (x+2*y-7)**2 + (2*x+y-5)**2
 -- evaluated at x,y \in [-100,100]
 bohachevsky :: (Num a, Floating a) => (a, a) -> a
 bohachevsky v = x**2 + 2*(y**2) - a - b + 0.7
-    where a = (0.3*cos (3*pi*x))
+    where a = 0.3*(cos (3*pi*x))
           b = 0.4*(cos (4*pi*y))
           x = fst v
           y = snd v
@@ -63,8 +63,8 @@ holdertable v = - (abs a*b)
 -- global min f(0,0) = -1
 -- evaluated at x,y \in [-5.12,5.12]
 dropwave :: (Num a, Floating a) => (a, a) -> a
-dropwave v = -(a/b)
-    where a = 1 + (cos 12*(sqrt $ x**2+y**2))
+dropwave v = a/b
+    where a = - 1 - (cos $ 12*(sqrt $ x**2+y**2))
           b = 0.5 * (x**2 + y**2) + 2
           x = fst v
           y = snd v
@@ -90,6 +90,7 @@ crossInTray v = -0.001 * ((abs ((sin x) * (sin y) * a + 1)) ** (0.1))
           x = fst v
           y = snd v
 
+testFunctions :: (Floating a) => [(String, (a, a) -> a, ((Double, Double), (Double, Double)), (Double, Double))]
 testFunctions = [
         ("booth", booth, ((-10, 10), (-10, 10)), (1, 3)),
         ("bohachevsky", bohachevsky, ((-100, 100), (-100, 100)), (0, 0)),
